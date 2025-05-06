@@ -1,2 +1,8 @@
 fastapi
 uvicorn[standard]
+gunicorn
+python3
+python3-pip
+git
+curl
+python-dotenv
