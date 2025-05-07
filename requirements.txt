@@ -9,3 +9,4 @@ python-dotenv
 nano
 pydantic
 python-multipart
+requests
