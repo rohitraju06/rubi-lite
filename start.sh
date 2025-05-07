@@ -1,3 +1,4 @@
 #!/bin/bash
 cd /app/rubi-lite
-gunicorn -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:8000
+npm run dev -- --host
+#gunicorn -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:8000
