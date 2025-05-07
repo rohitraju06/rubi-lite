@@ -33,6 +33,7 @@ def query_ollama(prompt):
             "stream": False
         }
 
+        print(f"Querying Ollama at: {OLLAMA_URL}")
         response = requests.post(
             f"{OLLAMA_URL}/api/generate",
             json=payload,
@@ -42,6 +43,7 @@ def query_ollama(prompt):
 
         response.raise_for_status()
         data = response.json()
+        print("Ollama responded with:", data)
         return data.get("response", "[No reply from model]")
     except Exception as e:
         print("Error querying Ollama:", e)
