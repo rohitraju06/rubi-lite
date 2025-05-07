@@ -144,7 +144,7 @@ async def add_link(item: LinkItem, user: dict = Depends(require_user)):
         return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...), user: str = None, user: dict = Depends(require_user)):
+async def upload_file(file: UploadFile = File(...), user: dict = Depends(require_user)):
     try:
         if not file:
             return JSONResponse(status_code=400, content={"error": "Missing file in request"})
@@ -157,7 +157,7 @@ async def upload_file(file: UploadFile = File(...), user: str = None, user: dict
             "type": "upload",
             "filename": file.filename,
             "path": str(file_path),
-            "user": user,
+            "user": user.get("user"),
             "timestamp": datetime.utcnow().isoformat()
         }
         queue.append(entry)
