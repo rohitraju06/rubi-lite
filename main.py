@@ -1,6 +1,9 @@
 # main.py
 import os
-import requests
+try:
+    import requests
+except ImportError:
+    requests = None
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -14,7 +17,7 @@ QUEUE_FILE = Path("queue.json")
 DATA_FOLDER = Path("data")
 DATA_FOLDER.mkdir(exist_ok=True)
 
-OLLAMA_URL = os.getenv("OLLAMA_API", "http://localhost:11434").rstrip('/')
+OLLAMA_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434")
 
 # --- Helper functions ---
 def load_queue():
@@ -24,6 +27,22 @@ def load_queue():
 
 def save_queue(queue):
     QUEUE_FILE.write_text(json.dumps(queue, indent=2))
+
+def query_ollama(prompt):
+    if requests is None:
+        return "[Error: Requests module not available]"
+
+    try:
+        response = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            headers={"Content-Type": "application/json"},
+            json={"model": "phi", "prompt": prompt, "stream": False}
+        )
+        result = response.json()
+        return result.get("response", "[No reply from model]")
+    except Exception as e:
+        print("Error querying Ollama:", e)
+        return "[Error querying LLM]"
 
 # --- API Setup ---
 app = FastAPI()
@@ -56,18 +75,9 @@ async def handle_message(request: Request):
             return JSONResponse(status_code=400, content={"error": "Missing 'text' in request body"})
 
         print(f"Received message from {user or 'anonymous'}: {text}")
-        print(f"Forwarding to Ollama: {OLLAMA_URL}/api/generate with prompt: {text}")
 
-        # Call Ollama for response
-        response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            headers={"Content-Type": "application/json"},
-            json={"model": "phi", "prompt": text, "stream": False}
-        )
-
-        result = response.json()
-        print("Ollama response:", result)
-        return {"response": result.get("response", "[No reply]")}
+        response_text = query_ollama(text)
+        return {"response": response_text}
 
     except Exception as e:
         print("Error handling /message:", e)
