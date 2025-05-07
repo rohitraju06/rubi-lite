@@ -1,4 +1,6 @@
 # main.py
+import os
+import requests
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -11,6 +13,8 @@ import json
 QUEUE_FILE = Path("queue.json")
 DATA_FOLDER = Path("data")
 DATA_FOLDER.mkdir(exist_ok=True)
+
+OLLAMA_URL = os.getenv("OLLAMA_API", "http://localhost:11434").rstrip('/')
 
 # --- Helper functions ---
 def load_queue():
@@ -52,7 +56,18 @@ async def handle_message(request: Request):
             return JSONResponse(status_code=400, content={"error": "Missing 'text' in request body"})
 
         print(f"Received message from {user or 'anonymous'}: {text}")
-        return {"response": f"Rubi got it: {text}"}
+        print(f"Forwarding to Ollama: {OLLAMA_URL}/api/generate with prompt: {text}")
+
+        # Call Ollama for response
+        response = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            headers={"Content-Type": "application/json"},
+            json={"model": "phi", "prompt": text, "stream": False}
+        )
+
+        result = response.json()
+        print("Ollama response:", result)
+        return {"response": result.get("response", "[No reply]")}
 
     except Exception as e:
         print("Error handling /message:", e)
