@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from pathlib import Path
 from datetime import datetime
 import json
-import urllib.request
+import requests  # add this import at the top with the others
 
 # --- Configuration ---
 QUEUE_FILE = Path("queue.json")
@@ -26,25 +26,23 @@ def save_queue(queue):
     QUEUE_FILE.write_text(json.dumps(queue, indent=2))
 
 def query_ollama(prompt):
-    # Use urllib.request to POST to the Ollama API
     try:
-        payload = json.dumps({
+        payload = {
             "model": "phi",
             "prompt": prompt,
             "stream": False
-        }).encode("utf-8")
+        }
 
-        req = urllib.request.Request(
-            url=f"{OLLAMA_URL}/api/generate",
-            data=payload,
+        response = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json=payload,
             headers={"Content-Type": "application/json"},
-            method="POST"
+            timeout=10
         )
 
-        with urllib.request.urlopen(req) as resp:
-            resp_data = resp.read().decode("utf-8")
-            result = json.loads(resp_data)
-            return result.get("response", "[No reply from model]")
+        response.raise_for_status()
+        data = response.json()
+        return data.get("response", "[No reply from model]")
     except Exception as e:
         print("Error querying Ollama:", e)
         return "[Error querying LLM]"
