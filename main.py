@@ -11,6 +11,9 @@ from pathlib import Path
 from datetime import datetime
 import json
 import requests  # add this import at the top with the others
+from fastapi import Depends
+from auth import router as auth_router, require_user
+from rag import router as rag_router, run_worker
 
 # --- Configuration ---
 QUEUE_FILE = Path("queue.json")
@@ -62,6 +65,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
+app.include_router(rag_router, prefix="/rag", dependencies=[Depends(require_user)])
+
+@app.on_event("startup")
+def startup_event():
+    run_worker()
+
 # --- Data models ---
 class NoteItem(BaseModel):
     text: str
@@ -73,7 +83,7 @@ class LinkItem(BaseModel):
 
 # --- Endpoints ---
 @app.post("/message")
-async def handle_message(request: Request):
+async def handle_message(request: Request, user: dict = Depends(require_user)):
     try:
         body = await request.json()
         text = body.get("text")
@@ -92,7 +102,7 @@ async def handle_message(request: Request):
         return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
 @app.post("/note")
-async def add_note(item: NoteItem):
+async def add_note(item: NoteItem, user: dict = Depends(require_user)):
     try:
         text = item.text
         user = item.user
@@ -113,7 +123,7 @@ async def add_note(item: NoteItem):
         return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
 @app.post("/link")
-async def add_link(item: LinkItem):
+async def add_link(item: LinkItem, user: dict = Depends(require_user)):
     try:
         url = item.url
         user = item.user
@@ -134,7 +144,7 @@ async def add_link(item: LinkItem):
         return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...), user: str = None):
+async def upload_file(file: UploadFile = File(...), user: str = None, user: dict = Depends(require_user)):
     try:
         if not file:
             return JSONResponse(status_code=400, content={"error": "Missing file in request"})
