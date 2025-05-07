@@ -47,7 +47,7 @@ def query_ollama(prompt):
         response.raise_for_status()
         data = response.json()
         print("Ollama responded with:", data)
-        return data.get("response", "[No reply from model]")
+        return data.get("response").strip() or "Rubi chooses to ignore your query."
     except Exception as e:
         print("Error querying Ollama:", e)
         return "[Error querying LLM]"
