@@ -1,9 +1,5 @@
 # main.py
 import os
-try:
-    import requests
-except ImportError:
-    requests = None
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -11,6 +7,7 @@ from pydantic import BaseModel
 from pathlib import Path
 from datetime import datetime
 import json
+import urllib.request
 
 # --- Configuration ---
 QUEUE_FILE = Path("queue.json")
@@ -29,17 +26,25 @@ def save_queue(queue):
     QUEUE_FILE.write_text(json.dumps(queue, indent=2))
 
 def query_ollama(prompt):
-    if requests is None:
-        return "[Error: Requests module not available]"
-
+    # Use urllib.request to POST to the Ollama API
     try:
-        response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
+        payload = json.dumps({
+            "model": "phi",
+            "prompt": prompt,
+            "stream": False
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            url=f"{OLLAMA_URL}/api/generate",
+            data=payload,
             headers={"Content-Type": "application/json"},
-            json={"model": "phi", "prompt": prompt, "stream": False}
+            method="POST"
         )
-        result = response.json()
-        return result.get("response", "[No reply from model]")
+
+        with urllib.request.urlopen(req) as resp:
+            resp_data = resp.read().decode("utf-8")
+            result = json.loads(resp_data)
+            return result.get("response", "[No reply from model]")
     except Exception as e:
         print("Error querying Ollama:", e)
         return "[Error querying LLM]"
