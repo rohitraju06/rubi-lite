@@ -14,7 +14,7 @@ QUEUE_FILE = Path("queue.json")
 DATA_FOLDER = Path("data")
 DATA_FOLDER.mkdir(exist_ok=True)
 
-OLLAMA_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434")
+OLLAMA_URL = os.getenv("OLLAMA_API", "http://localhost:11434")
 
 # --- Helper functions ---
 def load_queue():
