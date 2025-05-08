@@ -78,16 +78,15 @@ class LinkItem(BaseModel):
 
 # --- Endpoints ---
 @app.post("/message")
-async def handle_message(request: Request, user: dict = Depends(require_user)):
+async def handle_message(request: Request):
     try:
         body = await request.json()
         text = body.get("text")
-        user = body.get("user")
 
         if not text:
             return JSONResponse(status_code=400, content={"error": "Missing 'text' in request body"})
 
-        print(f"Received message from {user or 'anonymous'}: {text}")
+        print(f"Received message from anonymous: {text}")
 
         response_text = query_ollama(text)
         return {"response": response_text}
