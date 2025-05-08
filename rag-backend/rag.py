@@ -21,6 +21,20 @@ def load_memory():
 def save_memory(data):
     DATA_PATH.write_text(json.dumps(data, indent=2))
 
+def search_memory(query: str, user: str):
+    memory = load_memory()
+    if not memory:
+        return "No memory available."
+
+    prompt_embedding = model.encode(query, convert_to_tensor=True)
+    scored = [
+        (util.cos_sim(prompt_embedding, model.encode(doc["text"], convert_to_tensor=True)).item(), doc)
+        for doc in memory
+    ]
+    scored.sort(reverse=True)
+    top = scored[:10]
+    return [doc for score, doc in top]
+
 # Pydantic model for queries
 class Query(BaseModel):
     prompt: str
@@ -46,3 +60,9 @@ async def add_doc(q: Query):
     memory.append({"text": q.prompt})
     save_memory(memory)
     return {"status": "added", "count": len(memory)}
+
+__all__ = ["search_memory"]
+
+if __name__ == "__main__":
+    result = search_memory("kitten", "kitten")
+    print(result)
