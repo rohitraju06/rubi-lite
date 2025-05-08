@@ -147,7 +147,7 @@ async def handle_message(msg: MessagePayload):
             return {"response": data.get("results", [])}
         except Exception as e:
             print("Error querying RAG:", e)
-            return JSONResponse(500, {"error": "RAG lookup failed"})
+            return JSONResponse(status_code=500, content={"error": "RAG lookup failed"})
 
     else:
         # fallback to LLM
