@@ -53,7 +53,9 @@ def query_ollama(prompt: str, history: list[dict] = None) -> str:
         resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        return data.get("response", "").strip() or "[no response]"
+        response = data.get("response", "").strip() or "[no response]"
+        conversation_memory.append({"role": "assistant", "text": response})
+        return response
     except Exception as e:
         print("Error querying Ollama:", e)
         return "[Error querying LLM]"
@@ -111,7 +113,6 @@ async def handle_message(msg: MessagePayload):
     if intent == "query":
         # simple query -> LLM
         resp = query_ollama(text, list(conversation_memory))
-        conversation_memory.append({"role": "assistant", "text": resp})
         return {"response": resp}
 
     elif intent == "save_note":
@@ -152,7 +153,6 @@ async def handle_message(msg: MessagePayload):
     else:
         # fallback to LLM
         resp = query_ollama(text, list(conversation_memory))
-        conversation_memory.append({"role": "assistant", "text": resp})
         return {"response": resp}
 
 
