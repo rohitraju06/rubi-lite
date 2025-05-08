@@ -21,6 +21,7 @@ DATA_FOLDER = Path("data")
 DATA_FOLDER.mkdir(exist_ok=True)
 
 OLLAMA_URL = os.getenv("OLLAMA_API", "http://localhost:11434")
+RAG_URL    = os.getenv("RAG_API", "http://localhost:8001")
 
 # --- Helper functions ---
 def load_queue():
@@ -86,8 +87,39 @@ async def handle_message(request: Request):
         if not text:
             return JSONResponse(status_code=400, content={"error": "Missing 'text' in request body"})
 
-        print(f"Received message from anonymous: {text}")
+        print(f"Received message: {text}")
 
+        # 1) classify intent
+        classify_prompt = (
+            "You are an assistant that extracts user intent from a message. "
+            "If the user is asking to save a note, respond with INTENT:save_note. "
+            "If saving a link, respond with INTENT:save_link. "
+            "If retrieving, respond with INTENT:retrieve. "
+            "Otherwise respond with INTENT:general.\n"
+            f"Message: {text}\n"
+            "Reply with only the intent."
+        )
+        intent = query_ollama(classify_prompt).strip()
+
+        if intent == "INTENT:save_note":
+            # forward to local note-queue
+            resp = requests.post(f"http://localhost:8000/note", json={"text": text})
+            return {"response": "Saved note.", "detail": resp.json()}
+
+        elif intent == "INTENT:save_link":
+            resp = requests.post(f"http://localhost:8000/link", json={"url": text})
+            return {"response": "Saved link.", "detail": resp.json()}
+
+        elif intent == "INTENT:retrieve":
+            # call your RAG backend
+            resp = requests.post(f"{RAG_URL}/query", json={"prompt": text})
+            results = resp.json().get("results", [])
+            # optionally summarize
+            summary_prompt = "Summarize these results:\n" + "\n".join([d["text"] for d in results])
+            summary = query_ollama(summary_prompt)
+            return {"response": summary, "results": results}
+
+        # fallback: general chat
         response_text = query_ollama(text)
         return {"response": response_text}
 
