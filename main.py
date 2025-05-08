@@ -15,6 +15,11 @@ from pydantic import BaseModel
 
 from auth import router as auth_router, require_user
 
+from collections import deque
+
+# keep last 20 messages for context
+conversation_memory = deque(maxlen=20)
+
 load_dotenv()
 
 # --- Configuration ---
@@ -34,10 +39,17 @@ def load_queue():
 def save_queue(queue):
     QUEUE_FILE.write_text(json.dumps(queue, indent=2))
 
-def query_ollama(prompt: str) -> str:
+def query_ollama(prompt: str, history: list[dict] = None) -> str:
     """Call Phi to get a raw text response."""
     try:
-        payload = {"model": "phi", "prompt": prompt, "stream": False}
+        # build history string
+        history_str = ""
+        if history:
+            for msg in history:
+                role = "User" if msg["role"] == "user" else "Assistant"
+                history_str += f"{role}: {msg['text']}\n"
+        full_prompt = f"{history_str}User: {prompt}\nAssistant:"
+        payload = {"model": "phi", "prompt": full_prompt, "stream": False}
         resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=10)
         resp.raise_for_status()
         data = resp.json()
@@ -89,6 +101,8 @@ async def handle_message(msg: MessagePayload):
     if not text:
         return JSONResponse(400, {"error": "Empty message"})
 
+    conversation_memory.append({"role": "user", "text": text})
+
     # 1) classify
     intent = classify_intent(text).lower()
     print(f"Classified intent: {intent}")
@@ -96,7 +110,8 @@ async def handle_message(msg: MessagePayload):
     # 2) route
     if intent == "query":
         # simple query -> LLM
-        resp = query_ollama(text)
+        resp = query_ollama(text, list(conversation_memory))
+        conversation_memory.append({"role": "assistant", "text": resp})
         return {"response": resp}
 
     elif intent == "save_note":
@@ -136,7 +151,8 @@ async def handle_message(msg: MessagePayload):
 
     else:
         # fallback to LLM
-        resp = query_ollama(text)
+        resp = query_ollama(text, list(conversation_memory))
+        conversation_memory.append({"role": "assistant", "text": resp})
         return {"response": resp}
 
 
