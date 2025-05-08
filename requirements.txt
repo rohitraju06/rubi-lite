@@ -10,3 +10,4 @@ nano
 pydantic
 python-multipart
 requests
+sentence-transformers
