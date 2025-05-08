@@ -100,11 +100,28 @@ async def handle_message(msg: MessagePayload):
         return {"response": resp}
 
     elif intent == "save_note":
-        # redirect to /note
-        return await add_note(NoteItem(text=text))
+        # inline note queuing without authentication
+        queue = load_queue()
+        queue.append({
+            "type": "note",
+            "text": text,
+            "user": None,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        save_queue(queue)
+        return {"status": "queued", "id": len(queue)-1}
 
     elif intent == "save_link":
-        return await add_link(LinkItem(url=text))
+        # inline link queuing without authentication
+        queue = load_queue()
+        queue.append({
+            "type": "link",
+            "url": text,
+            "user": None,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        save_queue(queue)
+        return {"status": "queued", "id": len(queue)-1}
 
     elif intent == "retrieve":
         # call your RAG service
