@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from typing import Annotated
 
 from auth import router as auth_router, require_user
 
@@ -157,7 +158,7 @@ async def handle_message(msg: MessagePayload):
 
 
 @app.post("/note")
-async def add_note(item: NoteItem, user: dict = Depends(require_user)):
+async def add_note(item: NoteItem, user: Annotated[dict, Depends(require_user)]):
     if not item.text.strip():
         return JSONResponse(400, {"error": "Empty note"})
     queue = load_queue()
@@ -172,7 +173,7 @@ async def add_note(item: NoteItem, user: dict = Depends(require_user)):
 
 
 @app.post("/link")
-async def add_link(item: LinkItem, user: dict = Depends(require_user)):
+async def add_link(item: LinkItem, user: Annotated[dict, Depends(require_user)]):
     if not item.url.strip():
         return JSONResponse(400, {"error": "Empty URL"})
     queue = load_queue()
@@ -189,7 +190,7 @@ async def add_link(item: LinkItem, user: dict = Depends(require_user)):
 @app.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
-    user: dict = Depends(require_user)
+    user: Annotated[dict, Depends(require_user)]
 ):
     contents = await file.read()
     dest = DATA_FOLDER / file.filename
