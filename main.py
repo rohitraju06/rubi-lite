@@ -158,8 +158,8 @@ async def handle_message(msg: MessagePayload):
 
 
 @app.post("/note")
-async def add_note(item: NoteItem, user: Annotated[dict, Depends(require_user)]):
-    if not item.text.strip():
+async def add_note(user: dict = Depends(require_user), item: NoteItem = None):
+    if not item or not item.text.strip():
         return JSONResponse(400, {"error": "Empty note"})
     queue = load_queue()
     queue.append({
@@ -173,8 +173,8 @@ async def add_note(item: NoteItem, user: Annotated[dict, Depends(require_user)])
 
 
 @app.post("/link")
-async def add_link(item: LinkItem, user: Annotated[dict, Depends(require_user)]):
-    if not item.url.strip():
+async def add_link(user: dict = Depends(require_user), item: LinkItem = None):
+    if not item or not item.url.strip():
         return JSONResponse(400, {"error": "Empty URL"})
     queue = load_queue()
     queue.append({
@@ -188,10 +188,7 @@ async def add_link(item: LinkItem, user: Annotated[dict, Depends(require_user)])
 
 
 @app.post("/upload")
-async def upload_file(
-    file: UploadFile = File(...),
-    user: Annotated[dict, Depends(require_user)]
-):
+async def upload_file(user: dict = Depends(require_user), file: UploadFile = File(...)):
     contents = await file.read()
     dest = DATA_FOLDER / file.filename
     dest.write_bytes(contents)
