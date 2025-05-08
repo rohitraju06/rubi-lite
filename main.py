@@ -1,19 +1,21 @@
 # main.py
+
 import os
+import json
+from pathlib import Path
+from datetime import datetime
+
+import requests
 from dotenv import load_dotenv
-load_dotenv()
-print("DEBUG: Loaded OLLAMA_API =", os.getenv("OLLAMA_API"))
-from fastapi import FastAPI, Request, UploadFile, File
+
+from fastapi import FastAPI, Request, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from pathlib import Path
-from datetime import datetime
-import json
-import requests  # add this import at the top with the others
-from fastapi import Depends
+
 from auth import router as auth_router, require_user
 
+load_dotenv()
 
 # --- Configuration ---
 QUEUE_FILE = Path("queue.json")
@@ -21,7 +23,7 @@ DATA_FOLDER = Path("data")
 DATA_FOLDER.mkdir(exist_ok=True)
 
 OLLAMA_URL = os.getenv("OLLAMA_API", "http://localhost:11434")
-RAG_URL    = os.getenv("RAG_API", "http://localhost:8001")
+RAG_URL    = os.getenv("RAG_API",   "http://localhost:8000/query")  # your RAG pod endpoint
 
 # --- Helper functions ---
 def load_queue():
@@ -32,43 +34,46 @@ def load_queue():
 def save_queue(queue):
     QUEUE_FILE.write_text(json.dumps(queue, indent=2))
 
-def query_ollama(prompt):
+def query_ollama(prompt: str) -> str:
+    """Call Phi to get a raw text response."""
     try:
-        payload = {
-            "model": "phi",
-            "prompt": prompt,
-            "stream": False
-        }
-
-        print(f"Querying Ollama at: {OLLAMA_URL}")
-        response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=10
-        )
-
-        response.raise_for_status()
-        data = response.json()
-        print("Ollama responded with:", data)
-        return data.get("response").strip() or "Rubi chooses to ignore your query."
+        payload = {"model": "phi", "prompt": prompt, "stream": False}
+        resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("response", "").strip() or "[no response]"
     except Exception as e:
         print("Error querying Ollama:", e)
         return "[Error querying LLM]"
 
-# --- API Setup ---
+def classify_intent(text: str) -> str:
+    """
+    Ask Phi to classify intent.
+    Returns one of: query, save_note, save_link, upload_file, retrieve
+    """
+    instr = (
+        "You are an intent classifier. "
+        "Given a user message, reply with exactly one of: "
+        "[query, save_note, save_link, upload_file, retrieve].\n\n"
+        f"Message: {text}\nIntent:"
+    )
+    return query_ollama(instr)
+
+# --- FastAPI setup ---
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten this later to your frontend URL
+    allow_origins=["*"],  # lock down in prod
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 app.include_router(auth_router)
 
 # --- Data models ---
+class MessagePayload(BaseModel):
+    text: str
+
 class NoteItem(BaseModel):
     text: str
     user: str = None
@@ -79,116 +84,91 @@ class LinkItem(BaseModel):
 
 # --- Endpoints ---
 @app.post("/message")
-async def handle_message(request: Request):
-    try:
-        body = await request.json()
-        text = body.get("text")
+async def handle_message(msg: MessagePayload):
+    text = msg.text.strip()
+    if not text:
+        return JSONResponse(400, {"error": "Empty message"})
 
-        if not text:
-            return JSONResponse(status_code=400, content={"error": "Missing 'text' in request body"})
+    # 1) classify
+    intent = classify_intent(text).lower()
+    print(f"Classified intent: {intent}")
 
-        print(f"Received message: {text}")
+    # 2) route
+    if intent == "query":
+        # simple query -> LLM
+        resp = query_ollama(text)
+        return {"response": resp}
 
-        # 1) classify intent
-        classify_prompt = (
-            "You are an assistant that extracts user intent from a message. "
-            "If the user is asking to save a note, respond with INTENT:save_note. "
-            "If saving a link, respond with INTENT:save_link. "
-            "If retrieving, respond with INTENT:retrieve. "
-            "Otherwise respond with INTENT:general.\n"
-            f"Message: {text}\n"
-            "Reply with only the intent."
-        )
-        intent = query_ollama(classify_prompt).strip()
+    elif intent == "save_note":
+        # redirect to /note
+        return await add_note(NoteItem(text=text))
 
-        if intent == "INTENT:save_note":
-            # forward to local note-queue
-            resp = requests.post(f"http://localhost:8000/note", json={"text": text})
-            return {"response": "Saved note.", "detail": resp.json()}
+    elif intent == "save_link":
+        return await add_link(LinkItem(url=text))
 
-        elif intent == "INTENT:save_link":
-            resp = requests.post(f"http://localhost:8000/link", json={"url": text})
-            return {"response": "Saved link.", "detail": resp.json()}
+    elif intent == "retrieve":
+        # call your RAG service
+        try:
+            rag_resp = requests.post(RAG_URL, json={"prompt": text}, timeout=10)
+            rag_resp.raise_for_status()
+            data = rag_resp.json()
+            return {"response": data.get("results", [])}
+        except Exception as e:
+            print("Error querying RAG:", e)
+            return JSONResponse(500, {"error": "RAG lookup failed"})
 
-        elif intent == "INTENT:retrieve":
-            # call your RAG backend
-            resp = requests.post(f"{RAG_URL}/query", json={"prompt": text})
-            results = resp.json().get("results", [])
-            # optionally summarize
-            summary_prompt = "Summarize these results:\n" + "\n".join([d["text"] for d in results])
-            summary = query_ollama(summary_prompt)
-            return {"response": summary, "results": results}
+    else:
+        # fallback to LLM
+        resp = query_ollama(text)
+        return {"response": resp}
 
-        # fallback: general chat
-        response_text = query_ollama(text)
-        return {"response": response_text}
-
-    except Exception as e:
-        print("Error handling /message:", e)
-        return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
 @app.post("/note")
 async def add_note(item: NoteItem, user: dict = Depends(require_user)):
-    try:
-        text = item.text
-        user = item.user
-        if not text or not text.strip():
-            return JSONResponse(status_code=400, content={"error": "Missing 'text' in request body"})
-        queue = load_queue()
-        entry = {
-            "type": "note",
-            "text": text,
-            "user": user,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        queue.append(entry)
-        save_queue(queue)
-        return {"status": "queued", "id": len(queue)-1}
-    except Exception as e:
-        print("Error handling /note:", e)
-        return JSONResponse(status_code=500, content={"error": "Internal server error"})
+    if not item.text.strip():
+        return JSONResponse(400, {"error": "Empty note"})
+    queue = load_queue()
+    queue.append({
+        "type": "note",
+        "text": item.text,
+        "user": user.get("user"),
+        "timestamp": datetime.utcnow().isoformat()
+    })
+    save_queue(queue)
+    return {"status": "queued", "id": len(queue)-1}
+
 
 @app.post("/link")
 async def add_link(item: LinkItem, user: dict = Depends(require_user)):
-    try:
-        url = item.url
-        user = item.user
-        if not url or not url.strip():
-            return JSONResponse(status_code=400, content={"error": "Missing 'url' in request body"})
-        queue = load_queue()
-        entry = {
-            "type": "link",
-            "url": url,
-            "user": user,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        queue.append(entry)
-        save_queue(queue)
-        return {"status": "queued", "id": len(queue)-1}
-    except Exception as e:
-        print("Error handling /link:", e)
-        return JSONResponse(status_code=500, content={"error": "Internal server error"})
+    if not item.url.strip():
+        return JSONResponse(400, {"error": "Empty URL"})
+    queue = load_queue()
+    queue.append({
+        "type": "link",
+        "url": item.url,
+        "user": user.get("user"),
+        "timestamp": datetime.utcnow().isoformat()
+    })
+    save_queue(queue)
+    return {"status": "queued", "id": len(queue)-1}
+
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...), user: dict = Depends(require_user)):
-    try:
-        if not file:
-            return JSONResponse(status_code=400, content={"error": "Missing file in request"})
-        contents = await file.read()
-        file_path = DATA_FOLDER / file.filename
-        file_path.write_bytes(contents)
+async def upload_file(
+    file: UploadFile = File(...),
+    user: dict = Depends(require_user)
+):
+    contents = await file.read()
+    dest = DATA_FOLDER / file.filename
+    dest.write_bytes(contents)
 
-        queue = load_queue()
-        entry = {
-            "type": "upload",
-            "filename": file.filename,
-            "path": str(file_path),
-            "user": user.get("user"),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        queue.append(entry)
-        save_queue(queue)
-        return {"status": "queued", "id": len(queue)-1}
-    except Exception as e:
-        print("Error handling /upload:", e)
-        return JSONResponse(status_code=500, content={"error": "Internal server error"})
+    queue = load_queue()
+    queue.append({
+        "type": "upload",
+        "filename": file.filename,
+        "path": str(dest),
+        "user": user.get("user"),
+        "timestamp": datetime.utcnow().isoformat()
+    })
+    save_queue(queue)
+    return {"status": "queued", "id": len(queue)-1}
