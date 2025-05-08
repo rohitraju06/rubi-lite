@@ -13,7 +13,7 @@ import json
 import requests  # add this import at the top with the others
 from fastapi import Depends
 from auth import router as auth_router, require_user
-from rag import router as rag_router, run_worker
+
 
 # --- Configuration ---
 QUEUE_FILE = Path("queue.json")
@@ -66,11 +66,6 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
-app.include_router(rag_router, prefix="/rag", dependencies=[Depends(require_user)])
-
-@app.on_event("startup")
-def startup_event():
-    run_worker()
 
 # --- Data models ---
 class NoteItem(BaseModel):
