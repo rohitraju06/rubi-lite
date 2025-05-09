@@ -176,12 +176,19 @@ async def handle_message(msg: MessagePayload):
         return {"confirm": summary}
 
     elif action == "retrieve":
-        # mark retrieve as pending so we can confirm or directly fetch
+        # ask for phrased query
         phrased_query = query_ollama(
             f"Please phrase the query to best retrieve stored memories or notes related to this:\n{text}"
         )
-        conversation_memory.append({"role": "assistant", "text": phrased_query, "pending_action": "retrieve"})
-        return {"confirm": phrased_query}
+        # use phrased query to query the RAG system immediately
+        try:
+            rag_resp = requests.post(RAG_URL, json={"prompt": phrased_query}, timeout=10)
+            rag_resp.raise_for_status()
+            results = rag_resp.json().get("results", [])
+            return {"results": results}
+        except Exception as e:
+            print("Error querying RAG:", e)
+            return JSONResponse(status_code=500, content={"error": "RAG lookup failed"})
 
     elif action == "list":
         data = load_queue()
