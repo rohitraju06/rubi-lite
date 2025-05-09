@@ -105,6 +105,13 @@ class LinkItem(BaseModel):
     url: str
     user: str = None
 
+# --- Helper to find pending action ---
+def find_pending_action():
+    for msg in conversation_memory:
+        if "pending_action" in msg:
+            return msg["pending_action"], msg
+    return None, None
+
 # --- Endpoints ---
 @app.post("/message")
 async def handle_message(msg: MessagePayload):
@@ -114,27 +121,41 @@ async def handle_message(msg: MessagePayload):
 
     conversation_memory.append({"role": "user", "text": text})
 
+    if text.lower() in ("yes", "y", "ok", "okay"):
+        action_name, pending_msg = find_pending_action()
+        if action_name == "store":
+            summary = pending_msg["text"]
+            queue = load_queue()
+            queue.append({
+                "type": "note",
+                "text": summary,
+                "user": None,
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            save_queue(queue)
+            # clear pending_action flags
+            for msg in conversation_memory:
+                msg.pop("pending_action", None)
+            return {"status": "saved", "text": summary}
+        elif action_name == "retrieve":
+            # no confirmation needed for retrieve, simply clear and return
+            _, pending_msg = find_pending_action()
+            # clear flags
+            for msg in conversation_memory:
+                msg.pop("pending_action", None)
+            # perform the original retrieval
+            try:
+                rag_resp = requests.post(RAG_URL, json={"prompt": pending_msg["text"]}, timeout=10)
+                rag_resp.raise_for_status()
+                results = rag_resp.json().get("results", [])
+                return {"results": results}
+            except Exception as e:
+                print("Error querying RAG:", e)
+                return JSONResponse(status_code=500, content={"error": "RAG lookup failed"})
+
     # 1) classify high‑level action
     action = classify_action(text)
     print(f"Classified action: {action}")
-
-    # 2) check for confirmation of pending store
-    if text.lower() in ("yes", "y", "ok", "okay") and any(msg.get("pending_store") for msg in conversation_memory):
-        # perform the actual save
-        pending = next(msg for msg in conversation_memory if msg.get("pending_store"))
-        summary = pending["text"]
-        queue = load_queue()
-        queue.append({
-            "type": "note",
-            "text": summary,
-            "user": None,
-            "timestamp": datetime.utcnow().isoformat()
-        })
-        save_queue(queue)
-        # clear pending flags
-        for msg in conversation_memory:
-            msg.pop("pending_store", None)
-        return {"status": "saved", "text": summary}
 
     # 3) route by action
     if action == "query":
@@ -149,18 +170,13 @@ async def handle_message(msg: MessagePayload):
             f"Summarize the following user message into one concise line for saving:\n{text}"
         )
         # mark it as pending
-        conversation_memory.append({"role": "assistant", "text": summary, "pending_store": True})
+        conversation_memory.append({"role": "assistant", "text": summary, "pending_action": "store"})
         return {"confirm": summary}
 
     elif action == "retrieve":
-        try:
-            rag_resp = requests.post(RAG_URL, json={"prompt": text}, timeout=10)
-            rag_resp.raise_for_status()
-            results = rag_resp.json().get("results", [])
-            return {"results": results}
-        except Exception as e:
-            print("Error querying RAG:", e)
-            return JSONResponse(status_code=500, content={"error": "RAG lookup failed"})
+        # mark retrieve as pending so we can confirm or directly fetch
+        conversation_memory.append({"role": "assistant", "text": text, "pending_action": "retrieve"})
+        return {"confirm_retrieve": "Do you want me to fetch results now?"}
 
     elif action == "list":
         data = load_queue()
