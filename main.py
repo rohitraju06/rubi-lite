@@ -115,13 +115,16 @@ def find_pending_action():
 # --- Endpoints ---
 @app.post("/message")
 async def handle_message(msg: MessagePayload):
+    def parse_confirmation(text: str) -> bool:
+        return text.strip().lower() in ("yes", "y", "ok", "okay")
+
     text = msg.text.strip()
     if not text:
         return JSONResponse(status_code=400, content={"error": "Empty message"})
 
     conversation_memory.append({"role": "user", "text": text})
 
-    if text.lower() in ("yes", "y", "ok", "okay"):
+    if parse_confirmation(text):
         action_name, pending_msg = find_pending_action()
         if action_name == "store":
             summary = pending_msg["text"]
@@ -167,7 +170,7 @@ async def handle_message(msg: MessagePayload):
     elif action == "store":
         # ask LLM to produce a concise summary line for saving
         summary = query_ollama(
-            f"Summarize the following user message into one concise line for saving:\n{text}"
+            f"Summarize this personal memory or preference for storing:\n{text}"
         )
         # mark it as pending
         conversation_memory.append({"role": "assistant", "text": summary, "pending_action": "store"})
@@ -175,7 +178,10 @@ async def handle_message(msg: MessagePayload):
 
     elif action == "retrieve":
         # mark retrieve as pending so we can confirm or directly fetch
-        conversation_memory.append({"role": "assistant", "text": text, "pending_action": "retrieve"})
+        phrased_query = query_ollama(
+            f"Please phrase the query to best retrieve stored memories or notes related to this:\n{text}"
+        )
+        conversation_memory.append({"role": "assistant", "text": phrased_query, "pending_action": "retrieve"})
         return {"confirm_retrieve": "Do you want me to fetch results now?"}
 
     elif action == "list":
