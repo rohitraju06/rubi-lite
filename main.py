@@ -141,16 +141,15 @@ async def handle_message(msg: MessagePayload):
                 msg.pop("pending_action", None)
             return {"status": "saved", "text": summary}
         elif action_name == "retrieve":
-            # no confirmation needed for retrieve, simply clear and return
-            _, pending_msg = find_pending_action()
-            # clear flags
-            for msg in conversation_memory:
-                msg.pop("pending_action", None)
-            # perform the original retrieval
+            # use pending_msg content to perform retrieval
+            phrased_query = pending_msg["text"]
             try:
-                rag_resp = requests.post(RAG_URL, json={"prompt": pending_msg["text"]}, timeout=10)
+                rag_resp = requests.post(RAG_URL, json={"prompt": phrased_query}, timeout=10)
                 rag_resp.raise_for_status()
                 results = rag_resp.json().get("results", [])
+                # clear pending flags
+                for msg in conversation_memory:
+                    msg.pop("pending_action", None)
                 return {"results": results}
             except Exception as e:
                 print("Error querying RAG:", e)
@@ -182,7 +181,7 @@ async def handle_message(msg: MessagePayload):
             f"Please phrase the query to best retrieve stored memories or notes related to this:\n{text}"
         )
         conversation_memory.append({"role": "assistant", "text": phrased_query, "pending_action": "retrieve"})
-        return {"confirm_retrieve": "Do you want me to fetch results now?"}
+        return {"confirm": phrased_query}
 
     elif action == "list":
         data = load_queue()
