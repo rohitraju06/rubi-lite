@@ -63,16 +63,32 @@ def query_ollama(prompt: str, history: list[dict] = None) -> str:
 
 def classify_intent(text: str) -> str:
     """
-    Ask Phi to classify intent.
-    Returns one of: query, save_note, save_link, upload_file, retrieve
+    Ask Phi to classify intent into one of: query, save_note, save_link, upload_file, retrieve.
+    Falls back to 'query' if unsure.
     """
-    instr = (
-        "You are an intent classifier. "
-        "Given a user message, reply with exactly one of: "
-        "[query, save_note, save_link, upload_file, retrieve].\n\n"
+    prompt = (
+        "You are an intent classifier for a personal assistant AI system. "
+        "Your job is to read a single user message and assign it to exactly one of these five action intents:\n\n"
+        "[query, save_note, save_link, upload_file, retrieve]\n\n"
+        "Rules:\n"
+        "- Only return the intent word—no punctuation or explanation.\n"
+        "- Match based on intended user action, not content.\n"
+        "- If unsure, fall back to query.\n"
+        "- Never guess anything outside the five options.\n\n"
+        "Examples:\n"
+        "\"Tell me about space\" → query\n"
+        "\"Save this note: cats are amazing\" → save_note\n"
+        "\"Here's a useful link: https://example.com\" → save_link\n"
+        "\"Upload this file\" → upload_file\n"
+        "\"Can you show me all my notes?\" → retrieve\n\n"
         f"Message: {text}\nIntent:"
     )
-    return query_ollama(instr)
+    # send hard prompt to Phi and normalize
+    intent = query_ollama(prompt).strip().lower()
+    # ensure valid fallback
+    if intent not in {"query", "save_note", "save_link", "upload_file", "retrieve"}:
+        return "query"
+    return intent
 
 # --- FastAPI setup ---
 app = FastAPI()
