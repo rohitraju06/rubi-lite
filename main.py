@@ -31,14 +31,26 @@ DATA_FOLDER.mkdir(exist_ok=True)
 OLLAMA_URL = os.getenv("OLLAMA_API", "http://localhost:11434")
 RAG_URL    = os.getenv("RAG_API",   "http://localhost:8000/query")  # your RAG pod endpoint
 
-# --- Intent Schema ---
-class IntentPayload(BaseModel):
-    intent: str
-    text:    Optional[str] = None
-    url:     Optional[str] = None
-    query:   Optional[str] = None
-    type:    Optional[str] = None
-    item_id: Optional[str] = None
+# --- Classification for high‑level actions ---
+ALLOWED_ACTIONS = {"query", "store", "retrieve", "list", "delete"}
+
+def classify_action(text: str) -> str:
+    """
+    Ask Phi for a single keyword action (query, store, retrieve, list, delete).
+    Retries up to 3 times until one of ALLOWED_ACTIONS is returned.
+    """
+    prompt = (
+        f"You are a classifier. Choose exactly one word from {sorted(ALLOWED_ACTIONS)} "
+        f"that best matches the user's intent for the message:\n{text}\n"
+        "Output only the single action:"
+    )
+    for _ in range(3):
+        raw = query_ollama(prompt)
+        action = raw.strip().lower()
+        if action in ALLOWED_ACTIONS:
+            return action
+    # fallback
+    return "query"
 
 # --- Helper functions ---
 def load_queue():
@@ -69,40 +81,6 @@ def query_ollama(prompt: str, history: list[dict] = None) -> str:
     except Exception as e:
         print("Error querying Ollama:", e)
         return "[Error querying LLM]"
-
-def classify_intent(text: str) -> Optional[IntentPayload]:
-    """
-    Ask Phi to return a single-line JSON with fields:
-      intent (one of [query, save_note, save_link, upload_file, retrieve, list, delete])
-      plus the relevant argument field (text, url, query, type, or item_id).
-    """
-    prompt = (
-        "You are an API router. For each user message, output exactly one line of JSON with:\n"
-        "- intent: one of [query, save_note, save_link, upload_file, retrieve, list, delete]\n"
-        "- the corresponding argument field:\n"
-        "  * save_note  → text\n"
-        "  * save_link  → url\n"
-        "  * upload_file→ (no extra field)\n"
-        "  * retrieve   → query\n"
-        "  * list       → type (notes, links, uploads)\n"
-        "  * delete     → item_id or query\n"
-        "Examples:\n"
-        "User: Save note my cat loves tuna\n"
-        "{\"intent\":\"save_note\",\"text\":\"my cat loves tuna\"}\n"
-        "User: Bookmark https://example.com\n"
-        "{\"intent\":\"save_link\",\"url\":\"https://example.com\"}\n"
-        "User: Show all notes\n"
-        "{\"intent\":\"list\",\"type\":\"notes\"}\n"
-        "User: Delete note 3\n"
-        "{\"intent\":\"delete\",\"item_id\":\"3\"}\n"
-        f"User: {text}\nOutput JSON:"
-    )
-    raw = query_ollama(prompt, list(conversation_memory))
-    try:
-        return IntentPayload.parse_raw(raw)
-    except Exception as e:
-        print("Failed to parse intent JSON:", raw, e)
-        return None
 
 # --- FastAPI setup ---
 app = FastAPI()
@@ -136,68 +114,70 @@ async def handle_message(msg: MessagePayload):
 
     conversation_memory.append({"role": "user", "text": text})
 
-    # 1) classify with structured JSON
-    intent_payload = classify_intent(text)
-    if not intent_payload:
-        # fallback to simple query
-        resp = query_ollama(text, list(conversation_memory))
-        return {"response": resp}
+    # 1) classify high‑level action
+    action = classify_action(text)
+    print(f"Classified action: {action}")
 
-    intent = intent_payload.intent
-    args   = intent_payload.dict()
-    print(f"Intent payload: {args}")
-
-    # 2) route by intent
-    if intent == "query":
-        resp = query_ollama(text, list(conversation_memory))
-        return {"response": resp}
-
-    elif intent == "save_note":
+    # 2) check for confirmation of pending store
+    if text.lower() in ("yes", "y", "ok", "okay") and any(msg.get("pending_store") for msg in conversation_memory):
+        # perform the actual save
+        pending = next(msg for msg in conversation_memory if msg.get("pending_store"))
+        summary = pending["text"]
         queue = load_queue()
         queue.append({
             "type": "note",
-            "text": intent_payload.text,
+            "text": summary,
             "user": None,
             "timestamp": datetime.utcnow().isoformat()
         })
         save_queue(queue)
-        return {"status": "queued", "id": len(queue)-1}
+        # clear pending flags
+        for msg in conversation_memory:
+            msg.pop("pending_store", None)
+        return {"status": "saved", "text": summary}
 
-    elif intent == "save_link":
-        queue = load_queue()
-        queue.append({
-            "type": "link",
-            "url": intent_payload.url,
-            "user": None,
-            "timestamp": datetime.utcnow().isoformat()
-        })
-        save_queue(queue)
-        return {"status": "queued", "id": len(queue)-1}
+    # 3) route by action
+    if action == "query":
+        # limit response to two lines
+        resp = query_ollama(f"{text}\nPlease answer in at most two lines.")
+        conversation_memory.append({"role": "assistant", "text": resp})
+        return {"response": resp}
 
-    elif intent == "retrieve":
+    elif action == "store":
+        # ask LLM to produce a concise summary line for saving
+        summary = query_ollama(
+            f"Summarize the following user message into one concise line for saving:\n{text}"
+        )
+        # mark it as pending
+        conversation_memory.append({"role": "assistant", "text": summary, "pending_store": True})
+        return {"confirm": summary}
+
+    elif action == "retrieve":
         try:
-            rag_resp = requests.post(RAG_URL, json={"prompt": intent_payload.query}, timeout=10)
+            rag_resp = requests.post(RAG_URL, json={"prompt": text}, timeout=10)
             rag_resp.raise_for_status()
             results = rag_resp.json().get("results", [])
-            return {"response": results}
+            return {"results": results}
         except Exception as e:
             print("Error querying RAG:", e)
             return JSONResponse(status_code=500, content={"error": "RAG lookup failed"})
 
-    elif intent == "list":
+    elif action == "list":
         data = load_queue()
-        filtered = [item for item in data if item["type"] == intent_payload.type]
+        filtered = [item for item in data if item["type"] == intent_payload.type]  # reuse type from old classification?
         return {"items": filtered}
 
-    elif intent == "delete":
+    elif action == "delete":
         data = load_queue()
-        key = intent_payload.item_id or intent_payload.query
-        new_data = [item for idx,item in enumerate(data) if str(idx) != key and (key.lower() not in json.dumps(item).lower())]
+        key = text.strip()
+        new_data = [item for idx, item in enumerate(data) if str(idx) != key]
         save_queue(new_data)
-        return {"status":"deleted", "remaining": len(new_data)}
+        return {"status": "deleted", "remaining": len(new_data)}
 
     else:
-        resp = query_ollama(text, list(conversation_memory))
+        # fallback to full LLM response
+        resp = query_ollama(text)
+        conversation_memory.append({"role": "assistant", "text": resp})
         return {"response": resp}
 
 
