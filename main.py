@@ -132,7 +132,7 @@ class LinkItem(BaseModel):
 async def handle_message(msg: MessagePayload):
     text = msg.text.strip()
     if not text:
-        return JSONResponse(400, {"error": "Empty message"})
+        return JSONResponse(status_code=400, content={"error": "Empty message"})
 
     conversation_memory.append({"role": "user", "text": text})
 
@@ -202,9 +202,9 @@ async def handle_message(msg: MessagePayload):
 
 
 @app.post("/note")
-async def add_note(user: dict = Depends(require_user), item: NoteItem = None):
+async def add_note(item: NoteItem, user: dict = Depends(require_user)):
     if not item or not item.text.strip():
-        return JSONResponse(400, {"error": "Empty note"})
+        return JSONResponse(status_code=400, content={"error": "Empty note"})
     queue = load_queue()
     queue.append({
         "type": "note",
@@ -217,9 +217,9 @@ async def add_note(user: dict = Depends(require_user), item: NoteItem = None):
 
 
 @app.post("/link")
-async def add_link(user: dict = Depends(require_user), item: LinkItem = None):
+async def add_link(item: LinkItem, user: dict = Depends(require_user)):
     if not item or not item.url.strip():
-        return JSONResponse(400, {"error": "Empty URL"})
+        return JSONResponse(status_code=400, content={"error": "Empty URL"})
     queue = load_queue()
     queue.append({
         "type": "link",
@@ -232,7 +232,7 @@ async def add_link(user: dict = Depends(require_user), item: LinkItem = None):
 
 
 @app.post("/upload")
-async def upload_file(user: dict = Depends(require_user), file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), user: dict = Depends(require_user)):
     contents = await file.read()
     dest = DATA_FOLDER / file.filename
     dest.write_bytes(contents)
